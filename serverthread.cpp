@@ -75,12 +75,15 @@ void process_request(int client_socket, const std::string &directory) {
     const int max_retries = 5;
     request_count++;
 
-    while (request.find("\r\n\r\n") == std::string::npos && retry_count < max_retries) {
+    while (retry_count < max_retries) {
         int bytes = recv(client_socket, buf, buf_size, 0);
         if (bytes > 0) {
             request.append(buf, bytes);
+            if (request.find("\r\n\r\n") != std::string::npos) {
+                break;
+            }
         } else if (bytes == 0) {
-            break;
+            break; // Client closed connection
         } else {
             if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
                 retry_count++;
@@ -92,7 +95,7 @@ void process_request(int client_socket, const std::string &directory) {
         }
     }
 
-    if (request.find("\r\n\r\n") == std::string::npos) {
+    if (request.empty() || request.find("\r\n\r\n") == std::string::npos) {
         send_response(client_socket, "400 Bad Request", "text/html", "<h1>400 Bad Request</h1>");
         return;
     }
@@ -176,7 +179,19 @@ int initialize_server(const std::string &address, int port) {
             continue;
 
         int yes = 1;
-        setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int));
+        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
+            perror("setsockopt(SO_REUSEADDR)");
+            close(sockfd);
+            continue;
+        }
+
+#ifdef SO_REUSEPORT
+        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(int)) == -1) {
+            perror("setsockopt(SO_REUSEPORT)");
+            close(sockfd);
+            continue;
+        }
+#endif
 
         if (bind(sockfd, p->ai_addr, p->ai_addrlen) == 0)
             break;
@@ -229,10 +244,6 @@ int main(int argc, char *argv[]) {
 
     create_default_website();
     server_socket = initialize_server(ip_address, port);
-
-    pthread_t stats;
-    pthread_create(&stats, nullptr, stats_thread, nullptr);
-    pthread_detach(stats);
 
     std::cout << "Thread-based server running on " << ip_address << ":" << port << "\n";
 
