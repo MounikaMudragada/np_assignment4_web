@@ -131,13 +131,15 @@ void process_request(int client_socket, const std::string &directory) {
 
 int initialize_server(const std::string &address, int port) {
     int sockfd;
-    struct addrinfo hints, *res, *p;
+    struct addrinfo hints{}, *res, *p;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
-    hints.ai_flags = AI_PASSIVE;
+    if (address.empty()) {
+        hints.ai_flags = AI_PASSIVE;
+    }
 
-    int rv = getaddrinfo(address.c_str(), std::to_string(port).c_str(), &hints, &res);
+    int rv = getaddrinfo(address.empty() ? nullptr : address.c_str(), std::to_string(port).c_str(), &hints, &res);
     if (rv != 0) {
         std::cerr << "getaddrinfo: " << gai_strerror(rv) << "\n";
         exit(EXIT_FAILURE);
@@ -149,15 +151,22 @@ int initialize_server(const std::string &address, int port) {
 
         int yes = 1;
         if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) == -1) {
-            perror("setsockopt");
-            exit(EXIT_FAILURE);
-        }
-
-        if (bind(sockfd, p->ai_addr, p->ai_addrlen) == -1) {
+            perror("setsockopt(SO_REUSEADDR)");
             close(sockfd);
             continue;
         }
-        break;
+        
+        if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEPORT, &yes, sizeof(int)) == -1) {
+            perror("setsockopt(SO_REUSEPORT)");
+            close(sockfd);
+            continue;
+        }
+
+
+        if (bind(sockfd, p->ai_addr, p->ai_addrlen) == 0)
+            break;
+
+        close(sockfd);
     }
 
     if (!p) {
@@ -216,7 +225,7 @@ int main(int argc, char *argv[]) {
     struct timeval timeout = {10, 0};
 
     while (keep_running) {
-        struct sockaddr_storage client_addr;
+        struct sockaddr_storage client_addr{};
         socklen_t addr_len = sizeof(client_addr);
         int client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &addr_len);
 
